@@ -1,0 +1,6 @@
+.git
+node_modules
+browser-profile
+storage-state.json
+afk-error.png
+*.zip

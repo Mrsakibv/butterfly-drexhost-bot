@@ -1,0 +1,17 @@
+{
+  "name": "butterfly-drexhosting-afk-bot",
+  "version": "1.0.0",
+  "description": "Playwright AFK test bot prepared for Railway headless deployment",
+  "main": "index.js",
+  "scripts": {
+    "start": "node bot.js",
+    "auth": "node auth.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "playwright": "^1.63.0"
+  }
+}
