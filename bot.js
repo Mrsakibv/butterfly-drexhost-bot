@@ -6,393 +6,475 @@ const path = require("node:path");
 // CONFIG
 // ============================================================
 
-// তোমার AFK Rewards page URL এখানে বসাও
 const WEBSITE = "https://dash.drexhost.in/afk";
 
-// Railway Volume-এ /data/storage-state.json সেট করবে।
-// লোকাল পরীক্ষায় ./storage-state.json ব্যবহার হবে।
-// Prefer Railway's secret variable. The state file is written only to the container's temporary directory.
 const AUTH_STATE_B64 = process.env.AUTH_STATE_B64;
-const STATE_PATH = process.env.STATE_PATH || (AUTH_STATE_B64
-  ? path.join('/tmp', 'storage-state.json')
-  : path.join(__dirname, 'storage-state.json'));
+
+const STATE_PATH =
+  process.env.STATE_PATH ||
+  (AUTH_STATE_B64
+    ? "/tmp/storage-state.json"
+    : path.join(__dirname, "storage-state.json"));
+
+// ============================================================
+// AUTH STATE
+// ============================================================
 
 if (AUTH_STATE_B64) {
   try {
-    fs.writeFileSync(STATE_PATH, Buffer.from(AUTH_STATE_B64, 'base64'));
-    console.log('Loaded authentication state from AUTH_STATE_B64.');
+    fs.mkdirSync(path.dirname(STATE_PATH), {
+      recursive: true
+    });
+
+    fs.writeFileSync(
+      STATE_PATH,
+      Buffer.from(AUTH_STATE_B64, "base64")
+    );
+
+    console.log("Loaded authentication state from AUTH_STATE_B64.");
   } catch (error) {
-    console.error('Could not decode AUTH_STATE_B64:', error.message);
+    console.error(
+      "Could not load authentication state:",
+      error.message
+    );
+
     process.exit(1);
   }
 }
 
-
 // ============================================================
-// START BOT
+// BOT
 // ============================================================
 
 (async () => {
+  let browser;
+  let context;
+  let stateSaver;
+  let shuttingDown = false;
 
-  console.log("");
-  console.log("============================================");
-  console.log("       AFK REWARDS TEST BOT");
-  console.log("============================================");
-  console.log("");
+  async function cleanup() {
+    if (shuttingDown) return;
+    shuttingDown = true;
 
-  // ----------------------------------------------------------
-  // OPEN CHROMIUM
-  // ----------------------------------------------------------
-
-  if (!fs.existsSync(STATE_PATH)) {
-    console.error(`Saved login state not found: ${STATE_PATH}`);
-    console.error("Run 'npm run auth' locally, then set AUTH_STATE_B64 in Railway Variables to the Base64 contents of storage-state.json.");
-    process.exit(1);
-  }
-
-  const browser = await chromium.launch({
-    headless: true,
-    args: ["--no-sandbox"]
-  });
-
-  const context = await browser.newContext({
-    storageState: STATE_PATH,
-    viewport: { width: 1280, height: 900 }
-  });
-
-  const page = await context.newPage();
-
-  // Refresh the saved cookies/local storage periodically in the mounted Volume.
-  const stateSaver = setInterval(async () => {
-    try {
-      await context.storageState({ path: STATE_PATH });
-      console.log("Login state saved.");
-    } catch (error) {
-      console.error("Could not save login state:", error.message);
-    }
-  }, 60_000);
-
-
-  // ----------------------------------------------------------
-  // OPEN WEBSITE
-  // ----------------------------------------------------------
-
-  console.log("Opening AFK Rewards page...");
-
-  await page.goto(WEBSITE, {
-    waitUntil: "domcontentloaded"
-  });
-
-  console.log("Website opened.");
-  console.log("");
-
-
-  console.log("Using saved Discord OAuth session (headless mode).");
-  console.log("If the site asks you to sign in again, stop the service and refresh storage-state.json locally.");
-
-
-  // ----------------------------------------------------------
-  // START AFK
-  // ----------------------------------------------------------
-
-  console.log("");
-  console.log("Looking for AFK button...");
-
-  // Wait for the dashboard to finish rendering
-await page.waitForTimeout(2500);
-
-console.log("Current page URL:", page.url());
-console.log("Current page title:", await page.title());
-
-// If AFK button is missing, open AFK Rewards from the sidebar
-const startButton = page.getByRole("button", {
-  name: "Start AFK",
-  exact: true
-});
-
-const stopButton = page.getByRole("button", {
-  name: "Stop AFK",
-  exact: true
-});
-
-if (
-  await startButton.count() === 0 &&
-  await stopButton.count() === 0
-) {
-  const afkMenu = page.getByText("AFK Rewards", {
-    exact: true
-  });
-
-  if (
-    await afkMenu.count() > 0 &&
-    await afkMenu.first().isVisible()
-  ) {
-    console.log("Opening AFK Rewards from sidebar...");
-
-    await afkMenu.first().click();
-    await page.waitForTimeout(3000);
-
-    console.log("AFK page URL:", page.url());
-  }
-}
-
-  // তোমার site-এ running অবস্থায় "Stop AFK" দেখা যায়।
-  // তাই প্রথমে Start AFK খুঁজছি।
-
-  const startAFK = page.getByRole("button", {
-    name: "Start AFK",
-    exact: true
-  });
-
-  if (await startAFK.count() > 0) {
-
-    if (await startAFK.first().isVisible()) {
-
-      console.log("Start AFK found.");
-
-      await startAFK.first().click();
-
-      console.log("AFK started.");
-
-    }
-
-  } else {
-
-    // যদি আগে থেকেই AFK running থাকে
-    const stopAFK = page.getByRole("button", {
-      name: "Stop AFK",
-      exact: true
-    });
-
-    if (await stopAFK.count() > 0) {
-
-      console.log(
-        "AFK is already running."
-      );
-
-    } else {
-
-      console.log(
-        "Start AFK button পাওয়া যায়নি."
-      );
-
-      await page.screenshot({
-        path: "afk-error.png",
-        fullPage: true
-      });
-
+    if (stateSaver) {
       clearInterval(stateSaver);
-      await context.storageState({ path: STATE_PATH }).catch(() => {});
-      await context.close();
-      await browser.close();
-      return;
+    }
+
+    if (context) {
+      try {
+        await context.storageState({
+          path: STATE_PATH
+        });
+      } catch (error) {
+        console.log(
+          "Could not save login state:",
+          error.message
+        );
+      }
+
+      try {
+        await context.close();
+      } catch {}
+    }
+
+    if (browser) {
+      try {
+        await browser.close();
+      } catch {}
     }
   }
 
-
-  console.log("");
-  console.log("============================================");
-  console.log("AFK SESSION ACTIVE");
-  console.log("============================================");
-  console.log("");
-
-
-  // ----------------------------------------------------------
-  // GAME LOOP
-  // ----------------------------------------------------------
-
-  let round = 0;
-
-  process.on("SIGTERM", async () => {
-    clearInterval(stateSaver);
-    try { await context.storageState({ path: STATE_PATH }); } catch {}
-    try { await context.close(); } catch {}
-    try { await browser.close(); } catch {}
+  process.once("SIGTERM", async () => {
+    await cleanup();
     process.exit(0);
   });
 
-  while (true) {
+  process.once("SIGINT", async () => {
+    await cleanup();
+    process.exit(0);
+  });
 
-    round++;
+  try {
+    console.log("");
+    console.log("============================================");
+    console.log("       AFK REWARDS TEST BOT");
+    console.log("       BUILD: AFK-NAV-FIX-2");
+    console.log("============================================");
 
-    console.log("--------------------------------------------");
-    console.log(`ROUND ${round}`);
-    console.log("--------------------------------------------");
-
-    try {
-
-      // ------------------------------------------------------
-      // CHECK YOUR TURN
-      // ------------------------------------------------------
-
-      const yourTurn = page.getByText(
-        "Your turn (X)",
-        {
-          exact: true
-        }
+    if (!fs.existsSync(STATE_PATH)) {
+      throw new Error(
+        `Authentication state not found: ${STATE_PATH}. ` +
+        "Configure AUTH_STATE_B64 in Railway Variables."
       );
+    }
 
-      if (!(await yourTurn.isVisible())) {
+    // --------------------------------------------------------
+    // LAUNCH BROWSER
+    // --------------------------------------------------------
 
-        console.log(
-          "Waiting for Your turn (X)..."
-        );
+    browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox"]
+    });
 
-        await page.waitForTimeout(700);
-
-        continue;
+    context = await browser.newContext({
+      storageState: STATE_PATH,
+      viewport: {
+        width: 1280,
+        height: 900
       }
+    });
 
+    const page = await context.newPage();
 
-      console.log(
-        "Your turn detected."
-      );
-
-
-      // ------------------------------------------------------
-      // FIND ALL 9 CELLS
-      // ------------------------------------------------------
-
-      const cells = page.locator(
-        'button[aria-label^="Cell "]'
-      );
-
-      const count = await cells.count();
-
-      console.log(
-        `Found ${count} Tic-Tac-Toe cells.`
-      );
-
-
-      if (count !== 9) {
-
-        console.log(
-          "Expected 9 cells."
-        );
-
-        await page.waitForTimeout(1000);
-
-        continue;
-      }
-
-
-      // ------------------------------------------------------
-      // FIND ENABLED CELL
-      // ------------------------------------------------------
-
-      let clicked = false;
-
-      for (let i = 1; i <= 9; i++) {
-
-        const cell = page.getByRole("button", {
-          name: `Cell ${i}`,
-          exact: true
+    stateSaver = setInterval(async () => {
+      try {
+        await context.storageState({
+          path: STATE_PATH
         });
 
-        const visible =
-          await cell.isVisible();
+        console.log("Login state saved.");
+      } catch (error) {
+        console.error(
+          "Could not save login state:",
+          error.message
+        );
+      }
+    }, 60000);
 
-        const enabled =
-          await cell.isEnabled();
+    // --------------------------------------------------------
+    // OPEN WEBSITE
+    // --------------------------------------------------------
 
-        if (!visible || !enabled) {
+    console.log("Opening AFK Rewards page...");
+
+    await page.goto(WEBSITE, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000
+    });
+
+    await page.waitForTimeout(4000);
+
+    console.log("Website opened.");
+    console.log("Current URL:", page.url());
+    console.log("Page title:", await page.title());
+    console.log("Using saved Discord OAuth session.");
+
+    // --------------------------------------------------------
+    // HELPERS
+    // --------------------------------------------------------
+
+    async function firstVisible(locator) {
+      const count = await locator.count();
+
+      for (let i = 0; i < count; i++) {
+        const item = locator.nth(i);
+
+        try {
+          if (await item.isVisible()) {
+            return item;
+          }
+        } catch {}
+      }
+
+      return null;
+    }
+
+    async function findAFKControl(action) {
+      const pattern =
+        action === "start"
+          ? /start[\s-]*afk/i
+          : /stop[\s-]*afk/i;
+
+      const candidates = [
+        page.getByRole("button", {
+          name: pattern
+        }),
+
+        page.locator("button").filter({
+          hasText: pattern
+        }),
+
+        page.locator('[role="button"]').filter({
+          hasText: pattern
+        })
+      ];
+
+      for (const candidate of candidates) {
+        const item = await firstVisible(candidate);
+
+        if (item) {
+          return item;
+        }
+      }
+
+      return null;
+    }
+
+    // --------------------------------------------------------
+    // FIND AFK BUTTON
+    // --------------------------------------------------------
+
+    console.log("Looking for AFK controls...");
+
+    let startAFK = await findAFKControl("start");
+    let stopAFK = await findAFKControl("stop");
+
+    // If controls are missing, try opening the sidebar menu.
+    if (!startAFK && !stopAFK) {
+      console.log("AFK controls not visible yet.");
+      console.log("Searching for AFK Rewards menu...");
+
+      const menuItems = page.getByText(
+        /AFK\s*Rewards/i
+      );
+
+      const menuCount = await menuItems.count();
+
+      console.log("AFK Rewards text matches:", menuCount);
+
+      let menuClicked = false;
+
+      for (let i = 0; i < menuCount; i++) {
+        const item = menuItems.nth(i);
+
+        try {
+          if (!(await item.isVisible())) {
+            continue;
+          }
+
+          console.log("Clicking AFK Rewards menu...");
+
+          await item.click({
+            timeout: 5000
+          });
+
+          menuClicked = true;
+          break;
+        } catch (error) {
+          console.log(
+            "Menu click attempt failed:",
+            error.message
+          );
+        }
+      }
+
+      if (menuClicked) {
+        await page.waitForTimeout(4000);
+      } else {
+        console.log("Could not click the AFK Rewards menu.");
+      }
+    }
+
+    // Search again after navigation.
+    console.log("URL after navigation:", page.url());
+
+    startAFK = await findAFKControl("start");
+    stopAFK = await findAFKControl("stop");
+
+    // --------------------------------------------------------
+    // START AFK OR DETECT EXISTING SESSION
+    // --------------------------------------------------------
+
+    if (startAFK) {
+      console.log("Start AFK control found.");
+
+      await startAFK.click({
+        timeout: 10000
+      });
+
+      await page.waitForTimeout(2000);
+
+      console.log("Start AFK button clicked.");
+    } else if (stopAFK) {
+      console.log("AFK is already running.");
+    } else {
+      console.log("");
+      console.log("AFK controls could not be found.");
+
+      // Output visible controls to diagnose the actual page.
+      const controls = await page
+        .locator(
+          "button, [role='button'], a, [role='link'], " +
+          "input[type='button'], input[type='submit']"
+        )
+        .evaluateAll((elements) =>
+          elements
+            .filter((element) =>
+              element.getClientRects().length > 0
+            )
+            .slice(0, 60)
+            .map((element) => ({
+              tag: element.tagName,
+              text: (
+                element.innerText ||
+                element.value ||
+                element.textContent ||
+                ""
+              )
+                .replace(/\s+/g, " ")
+                .trim()
+                .slice(0, 120),
+              aria: element.getAttribute("aria-label"),
+              title: element.getAttribute("title"),
+              href: element.getAttribute("href")
+            }))
+        );
+
+      console.log(
+        "Visible controls:",
+        JSON.stringify(controls)
+      );
+
+      const headings = await page
+        .locator("h1, h2, h3")
+        .evaluateAll((elements) =>
+          elements
+            .filter((element) =>
+              element.getClientRects().length > 0
+            )
+            .map((element) =>
+              (element.innerText || "").trim()
+            )
+        );
+
+      console.log(
+        "Visible headings:",
+        JSON.stringify(headings)
+      );
+
+      console.log(
+        "Stopping so the diagnostic logs can be checked."
+      );
+
+      await cleanup();
+      return;
+    }
+
+    // --------------------------------------------------------
+    // ACTIVE SESSION
+    // --------------------------------------------------------
+
+    console.log("");
+    console.log("============================================");
+    console.log("AFK SESSION ACTIVE");
+    console.log("============================================");
+
+    // --------------------------------------------------------
+    // TIC-TAC-TOE GAME LOOP
+    // --------------------------------------------------------
+
+    let round = 0;
+
+    while (true) {
+      round++;
+
+      console.log("--------------------------------------------");
+      console.log(`ROUND ${round}`);
+      console.log("--------------------------------------------");
+
+      try {
+        // Check if it is our turn.
+        const yourTurn = page.getByText(
+          "Your turn (X)",
+          {
+            exact: true
+          }
+        );
+
+        if (!(await yourTurn.isVisible())) {
+          console.log("Waiting for Your turn (X)...");
+
+          await page.waitForTimeout(1000);
           continue;
         }
 
+        console.log("Your turn detected.");
 
-        console.log(
-          `Clicking Cell ${i}...`
+        // Find the nine game cells.
+        const cells = page.locator(
+          'button[aria-label^="Cell "]'
         );
 
-        await cell.click();
+        const cellCount = await cells.count();
 
-        console.log(
-          `Cell ${i} clicked.`
-        );
+        console.log(`Found ${cellCount} Tic-Tac-Toe cells.`);
 
-        clicked = true;
+        if (cellCount !== 9) {
+          console.log("Expected 9 cells.");
 
-        break;
-      }
+          await page.waitForTimeout(1500);
+          continue;
+        }
 
+        // Click the first visible, enabled cell.
+        let clicked = false;
 
-      // ------------------------------------------------------
-      // NO CELL AVAILABLE
-      // ------------------------------------------------------
+        for (let i = 1; i <= 9; i++) {
+          const cell = page.getByRole("button", {
+            name: `Cell ${i}`,
+            exact: true
+          });
 
-      if (!clicked) {
+          if (
+            !(await cell.isVisible()) ||
+            !(await cell.isEnabled())
+          ) {
+            continue;
+          }
 
-        console.log(
-          "No enabled cell available."
-        );
+          console.log(`Clicking Cell ${i}...`);
+
+          await cell.click();
+
+          console.log(`Cell ${i} clicked.`);
+
+          clicked = true;
+          break;
+        }
+
+        if (!clicked) {
+          console.log("No enabled cell available.");
+
+          await page.waitForTimeout(1500);
+          continue;
+        }
+
+        // Wait for the opponent's move.
+        console.log("Waiting for bot move...");
+
+        await page.waitForTimeout(1500);
+
+        // Restart the game if the button is available.
+        const restart = page.getByRole("button", {
+          name: "Restart",
+          exact: true
+        });
+
+        if (
+          await restart.count() > 0 &&
+          await restart.first().isVisible()
+        ) {
+          console.log("Restart button found.");
+
+          await restart.first().click();
+
+          console.log("Game restarted.");
+        } else {
+          console.log("Restart not available yet.");
+        }
 
         await page.waitForTimeout(1000);
+      } catch (error) {
+        console.error("ROUND ERROR:", error.message);
 
-        continue;
+        await page.waitForTimeout(2000);
       }
-
-
-      // ------------------------------------------------------
-      // WAIT FOR BOT
-      // ------------------------------------------------------
-
-      console.log(
-        "Waiting for bot move..."
-      );
-
-      await page.waitForTimeout(1200);
-
-
-      // ------------------------------------------------------
-      // CHECK IF RESTART IS AVAILABLE
-      // ------------------------------------------------------
-
-      const restart = page.getByRole("button", {
-        name: "Restart",
-        exact: true
-      });
-
-
-      if (
-        await restart.count() > 0 &&
-        await restart.first().isVisible()
-      ) {
-
-        console.log(
-          "Restart button found."
-        );
-
-        await restart.first().click();
-
-        console.log(
-          "Game restarted."
-        );
-
-      } else {
-
-        console.log(
-          "Restart not available yet."
-        );
-      }
-
-
-      // ------------------------------------------------------
-      // WAIT BEFORE NEXT ROUND
-      // ------------------------------------------------------
-
-      await page.waitForTimeout(1000);
-
-    } catch (error) {
-
-      console.log("");
-      console.log("ROUND ERROR");
-      console.log("--------------------------------------------");
-      console.log(error.message);
-      console.log("--------------------------------------------");
-      console.log("");
-
-      await page.waitForTimeout(2000);
     }
-  }
+  } catch (error) {
+    console.error("FATAL BOT ERROR:", error.message);
 
+    await cleanup();
+    process.exitCode = 1;
+  }
 })();
