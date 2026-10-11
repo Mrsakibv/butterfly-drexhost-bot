@@ -98,6 +98,44 @@ if (AUTH_STATE_B64) {
   console.log("");
   console.log("Looking for AFK button...");
 
+  // Wait for the dashboard to finish rendering
+await page.waitForTimeout(2500);
+
+console.log("Current page URL:", page.url());
+console.log("Current page title:", await page.title());
+
+// If AFK button is missing, open AFK Rewards from the sidebar
+const startButton = page.getByRole("button", {
+  name: "Start AFK",
+  exact: true
+});
+
+const stopButton = page.getByRole("button", {
+  name: "Stop AFK",
+  exact: true
+});
+
+if (
+  await startButton.count() === 0 &&
+  await stopButton.count() === 0
+) {
+  const afkMenu = page.getByText("AFK Rewards", {
+    exact: true
+  });
+
+  if (
+    await afkMenu.count() > 0 &&
+    await afkMenu.first().isVisible()
+  ) {
+    console.log("Opening AFK Rewards from sidebar...");
+
+    await afkMenu.first().click();
+    await page.waitForTimeout(3000);
+
+    console.log("AFK page URL:", page.url());
+  }
+}
+
   // তোমার site-এ running অবস্থায় "Stop AFK" দেখা যায়।
   // তাই প্রথমে Start AFK খুঁজছি।
 
